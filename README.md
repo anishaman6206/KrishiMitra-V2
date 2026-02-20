@@ -105,4 +105,3 @@ BACKEND_URL=http://127.0.0.1:8000
 
 ---
 
-g width="363" height="668" alt="image" src="https://github.com/user-attachments/assets/c21ad1be-63ff-4374-9e2e-59700c683379" />
