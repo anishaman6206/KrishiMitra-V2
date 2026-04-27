@@ -78,7 +78,7 @@ flowchart LR
 
   subgraph Backend[FastAPI Backend]
     API[main.py + Routers]
-    SVC[Domain Services<br/>Weather | Soil | Market | Forecast | AI | Vision]
+    SVC[Domain Services<br/>Weather / Soil / Market / Forecast / AI / Vision]
     AG[Agent Layer<br/>Agent Loop]
     RAG[RAG Layer<br/>index + retrieve]
     DB[(SQLite or Postgres<br/>Users + Farms)]
@@ -137,7 +137,7 @@ flowchart TB
   FE --> RT[/POST /api/ai/translate/]
 
   R3 --> LOOP[run_agent_once<br/>Planner -> Tool Calls -> Finalizer]
-  LOOP --> TOOLS[weather | soil | market | satellite | rag]
+  LOOP --> TOOLS[weather / soil / market / satellite / rag]
   TOOLS --> EXT[External APIs]
   LOOP --> FIN[Gemini Final Answer]
 
@@ -181,7 +181,7 @@ sequenceDiagram
 
   LOOP->>LLM: Final synthesis prompt
   LLM-->>LOOP: Final answer
-  LOOP-->>API: {answer, used_steps, error}
+  LOOP-->>API: answer, used_steps, error
   API-->>UI: JSON response
 ```
 
@@ -231,7 +231,7 @@ python -m venv .venv
 Windows PowerShell:
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
+.\\.venv\\Scripts\\Activate.ps1
 ```
 
 macOS/Linux:
