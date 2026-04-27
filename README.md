@@ -1,6 +1,6 @@
 # KrishiMitra AI
 
-KrishiMitra is a full-stack agriculture assistant with a FastAPI backend and a React (Vite + TypeScript) frontend. It combines weather, soil, mandi prices, price forecasting, crop recommendation, disease detection, and AI-assisted Q&A (including agentic and RAG-backed flows).
+KrishiMitra is a full-stack agriculture assistant with a FastAPI backend and a React (Vite + TypeScript) frontend. It combines weather, soil, mandi prices, price forecasting, crop recommendation, disease detection, and agentic AI/RAG capabilities.
 
 This README is based on the current code in this repository.
 
@@ -74,16 +74,16 @@ flowchart LR
   classDef store fill:#F3E5F5,stroke:#6A1B9A,color:#4A148C,stroke-width:1px;
   classDef ext fill:#ECEFF1,stroke:#455A64,color:#263238,stroke-width:1px;
 
-  U[Farmer User] --> FE[React Frontend\nKrishiMitra-UI-V2]
+  U[Farmer User] --> FE[React Frontend<br/>KrishiMitra-UI-V2]
 
   subgraph Backend[FastAPI Backend]
     API[main.py + Routers]
-    SVC[Domain Services\nWeather | Soil | Market | Forecast | AI | Vision]
-    AG[Agent Layer\nAgent Loop]
-    RAG[RAG Layer\nindex + retrieve]
-    DB[(SQLite or Postgres\nUsers + Farms)]
+    SVC[Domain Services<br/>Weather | Soil | Market | Forecast | AI | Vision]
+    AG[Agent Layer<br/>Agent Loop]
+    RAG[RAG Layer<br/>index + retrieve]
+    DB[(SQLite or Postgres<br/>Users + Farms)]
     CH[(Chroma Vector DB)]
-    PM[(Pricing Models\nLightGBM artifacts)]
+    PM[(Pricing Models<br/>LightGBM artifacts)]
   end
 
   FE -->|REST calls| API
@@ -136,7 +136,7 @@ flowchart TB
   FE[Frontend Ask Page] --> R3[/POST /api/ai3/ask/]
   FE --> RT[/POST /api/ai/translate/]
 
-  R3 --> LOOP[run_agent_once\nPlanner -> Tool Calls -> Finalizer]
+  R3 --> LOOP[run_agent_once<br/>Planner -> Tool Calls -> Finalizer]
   LOOP --> TOOLS[weather | soil | market | satellite | rag]
   TOOLS --> EXT[External APIs]
   LOOP --> FIN[Gemini Final Answer]
@@ -167,7 +167,7 @@ sequenceDiagram
   participant EXT as External APIs
   participant LLM as Gemini
 
-  UI->>API: POST /api/ai3/ask\n{question, target_language, farm_id, coords, district}
+  UI->>API: POST /api/ai3/ask<br/>{question, target_language, farm_id, coords, district}
   API->>DB: Load farm preferences by farm_id
   DB-->>API: preferred_commodities, preferred_mandi
   API->>LOOP: run_agent_once(...prefs...)
@@ -345,4 +345,3 @@ pytest backend/tests --cov=backend.app --cov-report=term-missing
 ## License
 
 See `LICENSE`.
-
