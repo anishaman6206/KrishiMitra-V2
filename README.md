@@ -162,7 +162,7 @@ sequenceDiagram
   participant UI as Frontend (AskAIPage)
   participant API as /api/ai3/ask
   participant DB as Farms DB
-  participant LOOP as Agent Loop
+  participant AGENT as Agent Loop
   participant TOOLS as Tool Layer
   participant EXT as External APIs
   participant LLM as Gemini
@@ -170,18 +170,18 @@ sequenceDiagram
   UI->>API: POST /api/ai3/ask<br/>{question, target_language, farm_id, coords, district}
   API->>DB: Load farm preferences by farm_id
   DB-->>API: preferred_commodities, preferred_mandi
-  API->>LOOP: run_agent_once(...prefs...)
+  API->>AGENT: run_agent_once(...prefs...)
 
-  LOOP->>LLM: Planner prompt
-  LLM-->>LOOP: tool plan JSON
-  LOOP->>TOOLS: Execute planned tools (with timeout/retry)
+  AGENT->>LLM: Planner prompt
+  LLM-->>AGENT: tool plan JSON
+  AGENT->>TOOLS: Execute planned tools (with timeout/retry)
   TOOLS->>EXT: Weather/Soil/Market/RAG calls
   EXT-->>TOOLS: Tool responses (or partial failures)
-  TOOLS-->>LOOP: Structured step results
+  TOOLS-->>AGENT: Structured step results
 
-  LOOP->>LLM: Final synthesis prompt
-  LLM-->>LOOP: Final answer
-  LOOP-->>API: answer, used_steps, error
+  AGENT->>LLM: Final synthesis prompt
+  LLM-->>AGENT: Final answer
+  AGENT-->>API: answer, used_steps, error
   API-->>UI: JSON response
 ```
 
