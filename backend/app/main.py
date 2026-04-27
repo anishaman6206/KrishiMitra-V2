@@ -12,7 +12,6 @@ from backend.app.routers.crop_recommendation import router as reco_router  # NEW
 from backend.app.routers.crop_disease import router as crop_disease_router  # NEW
 from backend.app.routers.market_forecast import router as market_forecast_router  # NEW
 from backend.app.routers.ai import router as ai_router
-from backend.app.routers.ai_graph import router as ai_graph_router
 from backend.app.routers.ai_agentic import router as ai_agent_router
 from backend.app.routers.rag import router as rag_router
 from backend.app.routers.market_meta import router as market_meta_router
@@ -68,7 +67,6 @@ def create_app() -> FastAPI:
     app.include_router(crop_disease_router)
     app.include_router(market_forecast_router) 
     app.include_router(ai_router)
-    app.include_router(ai_graph_router)
     app.include_router(ai_agent_router)
     app.include_router(rag_router)
     app.include_router(market_meta_router)

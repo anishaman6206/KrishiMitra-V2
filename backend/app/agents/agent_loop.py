@@ -1,8 +1,10 @@
 # backend/app/agent/agent_loop.py
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import asyncio, httpx, json, re
+import time
+from uuid import uuid4
 
 from backend.app.config import get_settings
 from backend.app.agents.tools import (
@@ -10,6 +12,16 @@ from backend.app.agents.tools import (
     tool_weather, tool_soil, tool_market,  tool_satellite, tool_rag,     # + tool_rag
     TOOL_DESCRIPTIONS, SATELLITE_ENABLED
 )
+
+TOOL_TIMEOUTS_SEC: Dict[str, float] = {
+    "weather": 15.0,
+    "soil": 15.0,
+    "market": 12.0,
+    "satellite": 18.0,
+    "rag": 12.0,
+}
+TOOL_MAX_ATTEMPTS = 2
+DEFAULT_TOKEN_BUDGET_EST = 6000
 
 
 # ---------------- Gemini caller (plain text, no MIME tricks) ----------------
@@ -35,6 +47,25 @@ async def _gemini_text_call(prompt: str, *, timeout: float = 15.0) -> str:
         return data["candidates"][0]["content"]["parts"][0]["text"]
     except Exception as e:
         raise RuntimeError(f"planner LLM unexpected schema: {e}")
+
+
+def _estimate_tokens_from_text(text: str) -> int:
+    # Rough estimate used only for safety budgeting.
+    return max(1, len(text) // 4)
+
+
+def _estimate_tokens_from_obj(obj: Any) -> int:
+    try:
+        data = json.dumps(obj, ensure_ascii=False)
+    except Exception:
+        data = str(obj)
+    return _estimate_tokens_from_text(data)
+
+
+def _consume_budget(state: "AgentState", amount: int, reason: str) -> bool:
+    state.token_used_est += max(0, amount)
+    state.budget_events.append({"reason": reason, "tokens": amount, "used": state.token_used_est})
+    return state.token_used_est <= state.token_budget_est
 
 # --------------- Loose JSON extraction (fence or brace-scan) ----------------
 def _extract_json_loose(text: str) -> dict:
@@ -79,10 +110,15 @@ class AgentState(BaseModel):
     preferred_commodities: list[str] | None = None
     preferred_mandi: str | None = None
 
-    steps: List[Dict[str, Any]] = []
+    steps: List[Dict[str, Any]] = Field(default_factory=list)
+    budget_events: List[Dict[str, Any]] = Field(default_factory=list)
     final_answer: str | None = None
     error: str | None = None
     max_steps: int = 3                     # keep responses quick
+    request_id: str = Field(default_factory=lambda: uuid4().hex[:10])
+    token_budget_est: int = DEFAULT_TOKEN_BUDGET_EST
+    token_used_est: int = 0
+    tool_failures: int = 0
 
 # ------------------------------ Planner prompt ------------------------------
 def planner_prompt(state: AgentState) -> str:
@@ -97,6 +133,9 @@ def planner_prompt(state: AgentState) -> str:
 
     tools = {k: v for k, v in TOOL_DESCRIPTIONS.items()
              if (k != "satellite" or SATELLITE_ENABLED)}
+    tool_names = ["weather", "soil", "market", "rag"]
+    if SATELLITE_ENABLED:
+        tool_names.append("satellite")
 
     return f"""You are KrishiMitra, a farm advisor agent.
 Question: {state.question}
@@ -108,13 +147,13 @@ Available tools (choose only if useful):
 Return STRICT JSON ONLY as ONE of:
 {{"action":"final","answer":"..."}}
 or
-{{"action":"tool","name":"weather|soil|market|recos|rag{"|satellite" if SATELLITE_ENABLED else ""}","args":{{...}}}}
+{{"action":"tool","name":"{'|'.join(tool_names)}","args":{{...}}}}
 or
 {{"action":"tools","calls":[{{"name":"weather","args":{{"lat":...,"lon":...}}}}, ...]}}
 
 Guidelines:
 - Prefer the farmer's preferred commodities and default mandi when using market/forecast.
-- Use lat/lon for weather/soil/recos/satellite; district (+optional mandi) for market.
+- Use lat/lon for weather/soil/satellite; district (+optional mandi) for market.
 - Keep toolset minimal; avoid redundant calls.
 JSON only—no explanations.
 """
@@ -140,8 +179,56 @@ async def _run_tool(name: str, args: dict) -> Dict[str, Any] | List[Dict[str, An
         return {"error": str(e)}
 
 
+async def _run_tool_with_policy(name: str, args: dict) -> Dict[str, Any]:
+    timeout_s = TOOL_TIMEOUTS_SEC.get(name, 12.0)
+    last_error = "unknown"
+    total_ms = 0
+
+    for attempt in range(1, TOOL_MAX_ATTEMPTS + 1):
+        t0 = time.perf_counter()
+        try:
+            res = await asyncio.wait_for(_run_tool(name, args), timeout=timeout_s)
+            duration_ms = int((time.perf_counter() - t0) * 1000)
+            total_ms += duration_ms
+
+            if isinstance(res, dict) and res.get("error"):
+                last_error = str(res.get("error"))
+                continue
+
+            return {
+                "ok": True,
+                "result": res,
+                "attempts": attempt,
+                "duration_ms": total_ms,
+                "timeout_s": timeout_s,
+                "error": None,
+            }
+        except Exception as e:
+            duration_ms = int((time.perf_counter() - t0) * 1000)
+            total_ms += duration_ms
+            last_error = str(e)
+
+    return {
+        "ok": False,
+        "result": {"error": last_error},
+        "attempts": TOOL_MAX_ATTEMPTS,
+        "duration_ms": total_ms,
+        "timeout_s": timeout_s,
+        "error": last_error,
+    }
+
+
 async def execute_one(state: AgentState) -> AgentState:
-    plan_text = await _gemini_text_call(planner_prompt(state), timeout=15.0)
+    pp = planner_prompt(state)
+    if not _consume_budget(state, _estimate_tokens_from_text(pp), "planner_prompt"):
+        state.error = "budget_exceeded_before_planner"
+        return state
+
+    plan_text = await _gemini_text_call(pp, timeout=15.0)
+    if not _consume_budget(state, _estimate_tokens_from_text(plan_text), "planner_response"):
+        state.error = "budget_exceeded_after_planner"
+        return state
+
     try:
         obj = _extract_json_loose(plan_text)
     except Exception as e:
@@ -167,8 +254,24 @@ async def execute_one(state: AgentState) -> AgentState:
             if not args.get("commodity") and state.preferred_commodities:
                 args["commodity"] = state.preferred_commodities[0]
 
-        res = await _run_tool(name, args)
-        state.steps.append({"tool": name, "args": args, "result": res})
+        exec_out = await _run_tool_with_policy(name, args)
+        step = {
+            "request_id": state.request_id,
+            "tool": name,
+            "args": args,
+            "result": exec_out["result"],
+            "status": "ok" if exec_out["ok"] else "error",
+            "attempts": exec_out["attempts"],
+            "duration_ms": exec_out["duration_ms"],
+            "timeout_s": exec_out["timeout_s"],
+            "error": exec_out["error"],
+        }
+        state.steps.append(step)
+        if not _consume_budget(state, _estimate_tokens_from_obj(step["result"]), f"tool_{name}_result"):
+            state.error = "budget_exceeded_after_tool"
+            return state
+        if not exec_out["ok"]:
+            state.tool_failures += 1
         return state
 
     if obj.get("action") == "tools":
@@ -190,11 +293,27 @@ async def execute_one(state: AgentState) -> AgentState:
                         # rotate through up to 5 preferred commodities if no commodity provided
                         # (optional) here we just pick the first; planner can create multiple calls explicitly
                         args["commodity"] = state.preferred_commodities[0]
-                res = await _run_tool(name, args)
-                return {"tool": name, "args": args, "result": res}
+                exec_out = await _run_tool_with_policy(name, args)
+                return {
+                    "request_id": state.request_id,
+                    "tool": name,
+                    "args": args,
+                    "result": exec_out["result"],
+                    "status": "ok" if exec_out["ok"] else "error",
+                    "attempts": exec_out["attempts"],
+                    "duration_ms": exec_out["duration_ms"],
+                    "timeout_s": exec_out["timeout_s"],
+                    "error": exec_out["error"],
+                }
 
         results = await asyncio.gather(*(guarded(c) for c in calls))
         state.steps.extend(results)
+        for r in results:
+            if not _consume_budget(state, _estimate_tokens_from_obj(r.get("result")), f"tool_{r.get('tool')}_result"):
+                state.error = "budget_exceeded_after_tool_batch"
+                return state
+            if r.get("status") == "error":
+                state.tool_failures += 1
         return state
 
     state.error = "planner_bad_action"
@@ -281,8 +400,16 @@ async def _finalize_answer(state: AgentState) -> str:
     prompt = f"""You are KrishiMitra. The user asked: {state.question}
 Use these tool results: {context}
 Answer concisely in {state.target_language}. If some data is missing, state assumptions briefly."""
+    if not _consume_budget(state, _estimate_tokens_from_text(prompt), "final_prompt"):
+        raise RuntimeError("budget_exceeded_before_finalize")
     # run in thread as it's sync httpx in your service
-    return await asyncio.wait_for(asyncio.to_thread(gemini_call, prompt), timeout=25.0)
+    ans = await asyncio.wait_for(asyncio.to_thread(gemini_call, prompt), timeout=25.0)
+    _consume_budget(state, _estimate_tokens_from_text(ans), "final_answer")
+    return ans
+
+
+def _has_successful_step(steps: List[Dict[str, Any]]) -> bool:
+    return any(st.get("status") == "ok" for st in steps)
 
 # ------------------------------- Public API --------------------------------
 async def run_agent_once(
@@ -303,10 +430,17 @@ async def run_agent_once(
     )
 
     for _ in range(state.max_steps):
+        if state.token_used_est >= state.token_budget_est:
+            return {
+                "answer": "Sorry, I reached the safety budget limit for this request.",
+                "used_steps": state.steps,
+                "error": "budget_exceeded",
+            }
+
         state = await execute_one(state)
         if state.error:
             # graceful fallback: summarize whatever we have (if any), otherwise message
-            if state.steps:
+            if state.steps and _has_successful_step(state.steps):
                 try:
                     ans = await _finalize_answer(state)
                     return {"answer": ans, "used_steps": state.steps, "error": None}
@@ -317,13 +451,21 @@ async def run_agent_once(
             return {"answer": state.final_answer, "used_steps": state.steps, "error": None}
 
         # After at least one tool step, try to finalize
-        if state.steps:
+        if state.steps and _has_successful_step(state.steps):
             try:
                 ans = await _finalize_answer(state)
                 return {"answer": ans, "used_steps": state.steps, "error": None}
             except Exception as e:
                 state.error = f"final_llm_failed: {e}"
                 return {"answer": "Sorry, I couldn't complete the task.", "used_steps": state.steps, "error": state.error}
+
+    # If all tool calls failed, provide a clearer fallback.
+    if state.steps and not _has_successful_step(state.steps):
+        return {
+            "answer": "Sorry, I could not fetch live data right now. Please try again in a moment.",
+            "used_steps": state.steps,
+            "error": "all_tools_failed",
+        }
 
     # safety net
     if state.steps:
