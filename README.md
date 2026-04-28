@@ -1,8 +1,8 @@
-# KrishiMitra AI
+# KrishiMitra AI — The Farmer's Copilot 🇮🇳
 
-KrishiMitra is a full-stack agriculture assistant with a FastAPI backend and a React (Vite + TypeScript) frontend. It combines weather, soil, mandi prices, price forecasting, crop recommendation, disease detection, and agentic AI/RAG capabilities.
+A unified, data-driven assistant for Indian farmers, designed to provide actionable, real-time advice on the most critical aspects of agriculture.
 
-This README is based on the current code in this repository.
+This project brings together a suite of powerful tools to answer a farmer's most pressing questions, from market prices to crop health, all through a simple, accessible interface.
 
 ## What Is Implemented
 
